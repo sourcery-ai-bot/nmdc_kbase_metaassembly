@@ -21,18 +21,20 @@ class mock_special:
 
     def wdl(self, params):
         print("mock wdl called")
-        contig_file = os.path.join(self.dst, 'assembly_contigs.fna')
+        fn = 'assembly_contigs.fna'
+        contig_file = os.path.join(self.dst, fn)
         meta = {
                 "calls": {
                    "jgi_metaASM.create_agp": [{
                       "outputs": {
-                        "outcontigs": contig_file
+                        "outcontigs": self.fna
                       }
                    }]
                 }
               }
         src=os.path.join(self.tdir, self.fna)
-        shutil.copy(src, contig_file)
+        os.makedirs(os.path.dirname(self.fna))
+        shutil.copy(src, self.fna)
         with open('/kb/module/work/tmp/meta.json', 'w') as f:
              f.write(json.dumps(meta))
 

@@ -66,11 +66,16 @@ class nmdc_mg_assembly:
         res = self.special.wdl(p)
         print('wdl: '+str(res))
 
-    def upload_assembly(self, file_path, workspace_name, assembly_name):
+    def _fix_path(self, orig):
+        ind = orig.find('cromwell-executions')
+        return os.path.join(self.scratch, orig[ind:])
+
+    def upload_assembly(self, file_path_orig, workspace_name, assembly_name):
         """
         From a list of file paths, uploads them to KBase, generates Assembly objects,
         then returns the generated UPAs.
         """
+        file_path = self._fix_path(file_path_orig)
         if not file_path:
             raise ValueError("file_path must be defined")
         if not os.path.exists(file_path):
