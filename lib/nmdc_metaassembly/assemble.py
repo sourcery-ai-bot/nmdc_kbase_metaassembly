@@ -60,7 +60,7 @@ class nmdc_mg_assembly:
 
         p = {
             'workflow': wdl_files[0],
-            'inputs': input_file
+            'inputs': 'inputs.json'
         }
 
         res = self.special.wdl(p)
