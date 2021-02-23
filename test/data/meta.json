@@ -1,0 +1,441 @@
+{
+  "workflowName": "jgi_metaASM",
+  "workflowProcessingEvents": [{
+    "timestamp": "2021-02-20T22:13:44.830Z",
+    "cromwellVersion": "57",
+    "description": "PickedUp",
+    "cromwellId": "cromid-65b5b6f"
+  }, {
+    "description": "Finished",
+    "cromwellId": "cromid-65b5b6f",
+    "cromwellVersion": "57",
+    "timestamp": "2021-02-20T22:15:37.029Z"
+  }],
+  "metadataSource": "Unarchived",
+  "actualWorkflowLanguageVersion": "draft-2",
+  "submittedFiles": {
+    "workflow": "workflow jgi_metaASM {\n    Array[File] input_file\n    String? outdir\n    String? memory\n    String? threads\n    String rename_contig_prefix=\"scaffold\"\n    Float uniquekmer=1000\n    String bbtools_container=\"microbiomedata/bbtools:38.90\"\n    String spades_container=\"microbiomedata/spades:3.15.0\"\n    call bbcms {\n          input: input_files=input_file, container=bbtools_container, memory=memory\n    }\n    call assy {\n         input: infile1=bbcms.out1, infile2=bbcms.out2, container=spades_container, threads=threads\n    }\n    call create_agp {\n         input: scaffolds_in=assy.out, container=bbtools_container, rename_contig_prefix = rename_contig_prefix, memory=memory\n    }\n    call read_mapping_pairs {\n         input: reads=input_file, ref=create_agp.outcontigs, container=bbtools_container, memory=memory, threads=threads\n    }\n    call make_output {\n         input: outdir=outdir, \n                bbcms_output=bbcms.out1,\n                assy_output=assy.out,\n                agp_contigs=create_agp.outcontigs,\n                agp_scaffolds=create_agp.outscaffolds,\n                agp_legend=create_agp.outlegend,\n                agp_agp=create_agp.outagp,\n                mapping_output=read_mapping_pairs.outcovfile,\n                container=spades_container\n    }\n    output {\n\tString final_contig = make_output.outcontigs\n\tString final_scaffold = make_output.outscaffolds\n\tString final_agp = make_output.outagp\n\tString final_covstat = make_output.outcovstats\n\tString final_samgz = make_output.outsamgz\n\tString final_bam = make_output.outbam\n\tString final_asmstat = make_output.outasmstats\n    }\n    parameter_meta{\n\tinput_file: \"illumina paired-end interleaved fastq files\"\n\toutdir: \"the final output directory path\"\n\trename_contig_prefix: \"contig prefix for fasta header, default: scaffold\"\n\tfinal_contig: \"assembled contigs fasta file\"\n\tfinal_scaffold: \"assembled scaffold fasta file\"\n\tfinal_agp: \"assembled AGP file\"\n\tfinal_covstat: \"contig coverage stats file\"\n\tfinal_samgz: \"reads aligned to contigs sam file with gz compressed\"\n\tfinal_bam: \"reads aligned to contigs bam file\"\n\tfinal_asmstat: \"assembled scaffold/contigs statistical numbers\"\n        memory: \"optional for jvm memory for bbtools, ex: 32G\"\n        threads: \"optional for jvm/spades threads for bbtools ex: 16\"\n    }\n\n    meta {\n        author: \"Chienchi Lo, B10, LANL\"\n        email: \"chienchi@lanl.gov\"\n        version: \"1.0.0\"\n    }\n\n}\n\ntask make_output{\n \tString outdir\n \tFile bbcms_output\n \tFile assy_output\n \tFile agp_contigs\n \tFile agp_scaffolds\n \tFile agp_legend\n \tFile agp_agp\n \tFile mapping_output\n        String container\n \n \tcommand{\n \t\tif [ ! -z ${outdir} ]; then\n \t\t\tmkdir -p ${outdir}/final_assembly ${outdir}/bbcms ${outdir}/mapping\n \t\t\tcp ${assy_output} ${outdir}/\n \t\t\tcp ${agp_contigs} ${outdir}/final_assembly/\n \t\t\tcp ${agp_scaffolds} ${outdir}/final_assembly/\n \t\t\tcp ${agp_legend} ${outdir}/final_assembly/\n \t\t\tcp ${agp_agp} ${outdir}/final_assembly/\n \t\t\tcp ${mapping_output} ${outdir}/mapping\n \t\t\tchmod 764 -R ${outdir}\n \t\tfi\n \t}\n\truntime {\n                docker: container\n\t\tmem: \"1 GiB\"\n\t\tcpu:  1\n\t}\n\toutput{\n\t\tString outcontigs = \"${outdir}/final_assembly/assembly_contigs.fasta\"\n\t        String outscaffolds = \"${outdir}/final_assembly/assembly_scaffolds.fasta\"\n      \t\tString outagp = \"${outdir}/final_assembly/assembly.agp\"\n\t\tString outbam = \"${outdir}/mapping/pairedMapped_sorted.bam\"\n\t\tString outsamgz = \"${outdir}/mapping/pairedMapped.sam.gz\" \n\t\tString outcovstats = \"${outdir}/mapping/covstats.txt\"\n\t\tString outasmstats = \"${outdir}/final_assembly/stats.json\"\n\t}\n}\n\ntask read_mapping_pairs{\n    Array[File] reads\n    File ref\n    String container\n    String? memory\n    String? threads\n\n    String filename_resources=\"resources.log\"\n    String filename_unsorted=\"pairedMapped.bam\"\n    String filename_outsam=\"pairedMapped.sam.gz\"\n    String filename_sorted=\"pairedMapped_sorted.bam\"\n    String filename_sorted_idx=\"pairedMapped_sorted.bam.bai\"\n    String filename_bamscript=\"to_bam.sh\"\n    String filename_cov=\"covstats.txt\"\n    String system_cpu=\"$(grep \\\"model name\\\" /proc/cpuinfo | wc -l)\"\n    String jvm_threads=select_first([threads,system_cpu])\n    runtime {\n            docker: container\n            mem: \"120 GiB\"\n\t    cpu:  16\n\t    maxRetries: 1\n     }\n    command{\n        touch ${filename_resources};\n        set -eo pipefail\n        if [[ ${reads[0]}  == *.gz ]] ; then\n             cat ${sep=\" \" reads} > infile.fastq.gz\n             export mapping_input=\"infile.fastq.gz\"\n        fi\n        if [[ ${reads[0]}  == *.fastq ]] ; then\n             cat ${sep=\" \" reads} > infile.fastq\n             export mapping_input=\"infile.fastq\"\n        fi\n        \n        bbmap.sh -Xmx${default=\"105G\" memory} threads=${jvm_threads} nodisk=true interleaved=true ambiguous=random in=$mapping_input ref=${ref} out=${filename_unsorted} covstats=${filename_cov} bamscript=${filename_bamscript}\n        samtools sort -m100M -@ ${jvm_threads} ${filename_unsorted} -o ${filename_sorted}\n        samtools index ${filename_sorted}\n        reformat.sh -Xmx${default=\"105G\" memory} in=${filename_unsorted} out=${filename_outsam} overwrite=true\n\tln ${filename_cov} mapping_stats.txt\n        rm $mapping_input\n  }\n  output{\n      File outbamfile = filename_sorted\n      File outbamfileidx = filename_sorted_idx\n      File outcovfile = filename_cov\n      File outsamfile = filename_outsam\n      File outresources = filename_resources\n  }\n}\n\ntask create_agp {\n    File scaffolds_in\n    String? memory\n    String container\n    String rename_contig_prefix\n    String filename_resources=\"resources.log\"\n    String prefix=\"assembly\"\n    String filename_contigs=\"${prefix}_contigs.fna\"\n    String filename_scaffolds=\"${prefix}_scaffolds.fna\"\n    String filename_agp=\"${prefix}.agp\"\n    String filename_legend=\"${prefix}_scaffolds.legend\"\n    runtime {\n            docker: container\n            mem: \"120 GiB\"\n\t    cpu:  16\n     }\n    command{\n        touch ${filename_resources};\n        export TIME=\"time result\\ncmd:%C\\nreal %es\\nuser %Us \\nsys  %Ss \\nmemory:%MKB \\ncpu %P\"\n        fungalrelease.sh -Xmx${default=\"105G\" memory} in=${scaffolds_in} out=${filename_scaffolds} outc=${filename_contigs} agp=${filename_agp} legend=${filename_legend} mincontig=200 minscaf=200 sortscaffolds=t sortcontigs=t overwrite=t\n        if [ \"${rename_contig_prefix}\" != \"scaffold\" ]; then\n            sed -i 's/scaffold/${rename_contig_prefix}_scf/g' ${filename_contigs} ${filename_scaffolds} ${filename_agp} ${filename_legend}\n        fi\n\tbbstats.sh format=8 in=${filename_scaffolds} out=stats.json\n\tsed -i 's/l_gt50k/l_gt50K/g' stats.json\n    }\n    output{\n\tFile outcontigs = filename_contigs\n\tFile outscaffolds = filename_scaffolds\n\tFile outagp = filename_agp\n    \tFile outlegend = filename_legend\n    \tFile outresources = filename_resources\n    }\n}\n\ntask assy {\n     File infile1\n     File infile2\n     String container\n     String? threads\n     String filename_resources=\"resources.log\"\n     String outprefix=\"spades3\"\n     String filename_outfile=\"${outprefix}/scaffolds.fasta\"\n     String filename_spadeslog =\"${outprefix}/spades.log\"\n     String system_cpu=\"$(grep \\\"model name\\\" /proc/cpuinfo | wc -l)\"\n     String spades_cpu=select_first([threads,system_cpu])\n     runtime {\n            docker: container\n            mem: \"120 GiB\"\n\t    cpu:  16\n     }\n     command{\n        touch ${filename_resources};\n        export TIME=\"time result\\ncmd:%C\\nreal %es\\nuser %Us \\nsys  %Ss \\nmemory:%MKB \\ncpu %P\"\n        set -eo pipefail\n        \n        spades.py -m 2000 -o ${outprefix} --only-assembler -k 33,55,77,99,127  --meta -t ${spades_cpu} -1 ${infile1} -2 ${infile2}\n     }\n     output {\n            File out = filename_outfile\n            File outlog = filename_spadeslog\n            File outresources = filename_resources\n     }\n}\n\ntask bbcms {\n     Array[File] input_files\n     String container\n     String? memory\n\n     String filename_resources=\"resources.log\"\n     String filename_outfile=\"input.corr.fastq.gz\"\n     String filename_outfile1=\"input.corr.left.fastq.gz\"\n     String filename_outfile2=\"input.corr.right.fastq.gz\"\n     String filename_readlen=\"readlen.txt\"\n     String filename_outlog=\"stdout.log\"\n     String filename_errlog=\"stderr.log\"\n     String filename_kmerfile=\"unique31mer.txt\"\n     String filename_counts=\"counts.metadata.json\"\n     runtime {\n            docker: container\n            mem: \"120 GiB\"\n\t    cpu:  16\n     }\n\n     command {\n        touch ${filename_resources};\n        export TIME=\"time result\\ncmd:%C\\nreal %es\\nuser %Us \\nsys  %Ss \\nmemory:%MKB \\ncpu %P\"\n        set -eo pipefail\n        if file --mime -b ${input_files[0]} | grep gzip; then \n             cat ${sep=\" \" input_files} > infile.fastq.gz\n             export bbcms_input=\"infile.fastq.gz\"\n        fi\n\tif file --mime -b ${input_files[0]} | grep plain; then\n             cat ${sep=\" \" input_files} > infile.fastq\n             export bbcms_input=\"infile.fastq\"\n        fi\n        bbcms.sh -Xmx${default=\"105G\" memory} metadatafile=${filename_counts} mincount=2 highcountfraction=0.6 in=$bbcms_input out=${filename_outfile} > >(tee -a ${filename_outlog}) 2> >(tee -a ${filename_errlog} >&2) && grep Unique ${filename_errlog} | rev |  cut -f 1 | rev  > ${filename_kmerfile}\n        reformat.sh -Xmx${default=\"105G\" memory} in=${filename_outfile} out1=${filename_outfile1} out2=${filename_outfile2}\n        readlength.sh -Xmx${default=\"105G\" memory} in=${filename_outfile} out=${filename_readlen}\n        rm $bbcms_input\n     }\n     output {\n            File out = filename_outfile\n            File out1 = filename_outfile1\n            File out2 = filename_outfile2\n            File outreadlen = filename_readlen\n            File stdout = filename_outlog\n            File stderr = filename_errlog\n            File outcounts = filename_counts\n            File outkmer = filename_kmerfile\n            File outresources = filename_resources\n     }\n}\n\n",
+    "root": "",
+    "options": "{\n\n}",
+    "inputs": "{\n\"jgi_metaASM.input_file\": [\"./test/data/small_test_reads.fastq.gz\"],\n\"jgi_metaASM.rename_contig_prefix\":\"503125_160870\",\n\"jgi_metaASM.outdir\":\"/out/\"\n\n}\n\n",
+    "workflowUrl": "metaAssembly/jgi_assembly.wdl",
+    "labels": "{}"
+  },
+  "calls": {
+    "jgi_metaASM.read_mapping_pairs": [{
+      "executionStatus": "Done",
+      "stdout": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/execution/stdout",
+      "backendStatus": "Done",
+      "compressedDockerSize": 449390415,
+      "commandLine": "       touch resources.log;\n       set -eo pipefail\n       if [[ /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/inputs/261688155/small_test_reads.fastq.gz  == *.gz ]] ; then\n            cat /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/inputs/261688155/small_test_reads.fastq.gz > infile.fastq.gz\n            export mapping_input=\"infile.fastq.gz\"\n       fi\n       if [[ /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/inputs/261688155/small_test_reads.fastq.gz  == *.fastq ]] ; then\n            cat /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/inputs/261688155/small_test_reads.fastq.gz > infile.fastq\n            export mapping_input=\"infile.fastq\"\n       fi\n       \n       bbmap.sh -Xmx105G threads=$(grep \"model name\" /proc/cpuinfo | wc -l) nodisk=true interleaved=true ambiguous=random in=$mapping_input ref=/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/inputs/1044559490/assembly_contigs.fna out=pairedMapped.bam covstats=covstats.txt bamscript=to_bam.sh\n       samtools sort -m100M -@ $(grep \"model name\" /proc/cpuinfo | wc -l) pairedMapped.bam -o pairedMapped_sorted.bam\n       samtools index pairedMapped_sorted.bam\n       reformat.sh -Xmx105G in=pairedMapped.bam out=pairedMapped.sam.gz overwrite=true\nln covstats.txt mapping_stats.txt\n       rm $mapping_input",
+      "shardIndex": -1,
+      "outputs": {
+        "outsamfile": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/execution/pairedMapped.sam.gz",
+        "outcovfile": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/execution/covstats.txt",
+        "outbamfileidx": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/execution/pairedMapped_sorted.bam.bai",
+        "outresources": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/execution/resources.log",
+        "outbamfile": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/execution/pairedMapped_sorted.bam"
+      },
+      "runtimeAttributes": {
+        "maxRetries": "1",
+        "continueOnReturnCode": "0",
+        "docker": "microbiomedata/bbtools:38.90",
+        "failOnStderr": "false"
+      },
+      "callCaching": {
+        "allowResultReuse": false,
+        "effectiveCallCachingMode": "CallCachingOff"
+      },
+      "inputs": {
+        "filename_bamscript": "to_bam.sh",
+        "jvm_threads": "$(grep \"model name\" /proc/cpuinfo | wc -l)",
+        "system_cpu": "$(grep \"model name\" /proc/cpuinfo | wc -l)",
+        "container": "microbiomedata/bbtools:38.90",
+        "ref": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly_contigs.fna",
+        "filename_unsorted": "pairedMapped.bam",
+        "filename_sorted_idx": "pairedMapped_sorted.bam.bai",
+        "filename_resources": "resources.log",
+        "reads": ["./test/data/small_test_reads.fastq.gz"],
+        "filename_sorted": "pairedMapped_sorted.bam",
+        "filename_outsam": "pairedMapped.sam.gz",
+        "filename_cov": "covstats.txt",
+        "threads": null,
+        "memory": null
+      },
+      "returnCode": 0,
+      "jobId": "2125",
+      "backend": "Docker",
+      "end": "2021-02-20T22:15:31.451Z",
+      "dockerImageUsed": "microbiomedata/bbtools@sha256:a51d71fac485154d585abbf7f7e861a59887c309ceedc3cec0c816acd80e2751",
+      "stderr": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/execution/stderr",
+      "callRoot": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs",
+      "attempt": 1,
+      "executionEvents": [{
+        "startTime": "2021-02-20T22:15:15.691Z",
+        "endTime": "2021-02-20T22:15:15.704Z",
+        "description": "PreparingJob"
+      }, {
+        "description": "RequestingExecutionToken",
+        "startTime": "2021-02-20T22:15:15.605Z",
+        "endTime": "2021-02-20T22:15:15.690Z"
+      }, {
+        "description": "UpdatingJobStore",
+        "startTime": "2021-02-20T22:15:31.451Z",
+        "endTime": "2021-02-20T22:15:31.451Z"
+      }, {
+        "startTime": "2021-02-20T22:15:15.604Z",
+        "description": "Pending",
+        "endTime": "2021-02-20T22:15:15.605Z"
+      }, {
+        "startTime": "2021-02-20T22:15:15.690Z",
+        "endTime": "2021-02-20T22:15:15.691Z",
+        "description": "WaitingForValueStore"
+      }, {
+        "endTime": "2021-02-20T22:15:31.451Z",
+        "description": "RunningJob",
+        "startTime": "2021-02-20T22:15:15.704Z"
+      }],
+      "start": "2021-02-20T22:15:15.604Z"
+    }],
+    "jgi_metaASM.assy": [{
+      "executionStatus": "Done",
+      "stdout": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/execution/stdout",
+      "backendStatus": "Done",
+      "compressedDockerSize": 88388214,
+      "commandLine": "touch resources.log;\nexport TIME=\"time result\\ncmd:%C\\nreal %es\\nuser %Us \\nsys  %Ss \\nmemory:%MKB \\ncpu %P\"\nset -eo pipefail\n\nspades.py -m 2000 -o spades3 --only-assembler -k 33,55,77,99,127  --meta -t $(grep \"model name\" /proc/cpuinfo | wc -l) -1 /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/inputs/1830643232/input.corr.left.fastq.gz -2 /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/inputs/1830643232/input.corr.right.fastq.gz",
+      "shardIndex": -1,
+      "outputs": {
+        "outlog": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/execution/spades3/spades.log",
+        "out": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/execution/spades3/scaffolds.fasta",
+        "outresources": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/execution/resources.log"
+      },
+      "runtimeAttributes": {
+        "maxRetries": "0",
+        "continueOnReturnCode": "0",
+        "docker": "microbiomedata/spades:3.15.0",
+        "failOnStderr": "false"
+      },
+      "callCaching": {
+        "allowResultReuse": false,
+        "effectiveCallCachingMode": "CallCachingOff"
+      },
+      "inputs": {
+        "infile2": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/input.corr.right.fastq.gz",
+        "spades_cpu": "$(grep \"model name\" /proc/cpuinfo | wc -l)",
+        "system_cpu": "$(grep \"model name\" /proc/cpuinfo | wc -l)",
+        "container": "microbiomedata/spades:3.15.0",
+        "filename_spadeslog": "spades3/spades.log",
+        "outprefix": "spades3",
+        "infile1": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/input.corr.left.fastq.gz",
+        "filename_resources": "resources.log",
+        "filename_outfile": "spades3/scaffolds.fasta",
+        "threads": null
+      },
+      "returnCode": 0,
+      "jobId": "1308",
+      "backend": "Docker",
+      "end": "2021-02-20T22:15:07.963Z",
+      "dockerImageUsed": "microbiomedata/spades@sha256:d22426b8a4c165b1b0824c2ae4a99e154613f999c1303f5788065b3c21e0ee8e",
+      "stderr": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/execution/stderr",
+      "callRoot": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy",
+      "attempt": 1,
+      "executionEvents": [{
+        "startTime": "2021-02-20T22:15:07.963Z",
+        "description": "UpdatingJobStore",
+        "endTime": "2021-02-20T22:15:07.963Z"
+      }, {
+        "startTime": "2021-02-20T22:14:46.025Z",
+        "description": "Pending",
+        "endTime": "2021-02-20T22:14:46.026Z"
+      }, {
+        "startTime": "2021-02-20T22:14:46.698Z",
+        "description": "PreparingJob",
+        "endTime": "2021-02-20T22:14:47.524Z"
+      }, {
+        "startTime": "2021-02-20T22:14:46.690Z",
+        "description": "WaitingForValueStore",
+        "endTime": "2021-02-20T22:14:46.698Z"
+      }, {
+        "startTime": "2021-02-20T22:14:47.524Z",
+        "description": "RunningJob",
+        "endTime": "2021-02-20T22:15:07.963Z"
+      }, {
+        "startTime": "2021-02-20T22:14:46.026Z",
+        "endTime": "2021-02-20T22:14:46.690Z",
+        "description": "RequestingExecutionToken"
+      }],
+      "start": "2021-02-20T22:14:46.024Z"
+    }],
+    "jgi_metaASM.make_output": [{
+      "executionStatus": "Done",
+      "stdout": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output/execution/stdout",
+      "backendStatus": "Done",
+      "compressedDockerSize": 88388214,
+      "commandLine": "if [ ! -z /out/ ]; then\n\tmkdir -p /out//final_assembly /out//bbcms /out//mapping\n\tcp /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output/inputs/-1162452599/scaffolds.fasta /out//\n\tcp /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output/inputs/1044559490/assembly_contigs.fna /out//final_assembly/\n\tcp /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output/inputs/1044559490/assembly_scaffolds.fna /out//final_assembly/\n\tcp /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output/inputs/1044559490/assembly_scaffolds.legend /out//final_assembly/\n\tcp /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output/inputs/1044559490/assembly.agp /out//final_assembly/\n\tcp /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output/inputs/402272890/covstats.txt /out//mapping\n\tchmod 764 -R /out/\nfi",
+      "shardIndex": -1,
+      "outputs": {
+        "outcovstats": "/out//mapping/covstats.txt",
+        "outagp": "/out//final_assembly/assembly.agp",
+        "outcontigs": "/out//final_assembly/assembly_contigs.fasta",
+        "outasmstats": "/out//final_assembly/stats.json",
+        "outbam": "/out//mapping/pairedMapped_sorted.bam",
+        "outsamgz": "/out//mapping/pairedMapped.sam.gz",
+        "outscaffolds": "/out//final_assembly/assembly_scaffolds.fasta"
+      },
+      "runtimeAttributes": {
+        "failOnStderr": "false",
+        "continueOnReturnCode": "0",
+        "docker": "microbiomedata/spades:3.15.0",
+        "maxRetries": "0"
+      },
+      "callCaching": {
+        "allowResultReuse": false,
+        "effectiveCallCachingMode": "CallCachingOff"
+      },
+      "inputs": {
+        "mapping_output": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-read_mapping_pairs/execution/covstats.txt",
+        "agp_agp": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly.agp",
+        "assy_output": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/execution/spades3/scaffolds.fasta",
+        "agp_legend": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly_scaffolds.legend",
+        "outdir": "/out/",
+        "container": "microbiomedata/spades:3.15.0",
+        "agp_contigs": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly_contigs.fna",
+        "agp_scaffolds": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly_scaffolds.fna",
+        "bbcms_output": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/input.corr.left.fastq.gz"
+      },
+      "returnCode": 0,
+      "jobId": "2568",
+      "backend": "Docker",
+      "end": "2021-02-20T22:15:35.544Z",
+      "dockerImageUsed": "microbiomedata/spades@sha256:d22426b8a4c165b1b0824c2ae4a99e154613f999c1303f5788065b3c21e0ee8e",
+      "stderr": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output/execution/stderr",
+      "callRoot": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-make_output",
+      "attempt": 1,
+      "executionEvents": [{
+        "description": "UpdatingJobStore",
+        "startTime": "2021-02-20T22:15:35.544Z",
+        "endTime": "2021-02-20T22:15:35.544Z"
+      }, {
+        "description": "PreparingJob",
+        "endTime": "2021-02-20T22:15:33.705Z",
+        "startTime": "2021-02-20T22:15:33.691Z"
+      }, {
+        "endTime": "2021-02-20T22:15:33.691Z",
+        "description": "WaitingForValueStore",
+        "startTime": "2021-02-20T22:15:33.690Z"
+      }, {
+        "description": "Pending",
+        "startTime": "2021-02-20T22:15:32.892Z",
+        "endTime": "2021-02-20T22:15:32.892Z"
+      }, {
+        "endTime": "2021-02-20T22:15:35.544Z",
+        "startTime": "2021-02-20T22:15:33.705Z",
+        "description": "RunningJob"
+      }, {
+        "startTime": "2021-02-20T22:15:32.892Z",
+        "endTime": "2021-02-20T22:15:33.690Z",
+        "description": "RequestingExecutionToken"
+      }],
+      "start": "2021-02-20T22:15:32.891Z"
+    }],
+    "jgi_metaASM.bbcms": [{
+      "executionStatus": "Done",
+      "stdout": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/stdout",
+      "backendStatus": "Done",
+      "compressedDockerSize": 449390415,
+      "commandLine": "       touch resources.log;\n       export TIME=\"time result\\ncmd:%C\\nreal %es\\nuser %Us \\nsys  %Ss \\nmemory:%MKB \\ncpu %P\"\n       set -eo pipefail\n       if file --mime -b /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/inputs/261688155/small_test_reads.fastq.gz | grep gzip; then \n            cat /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/inputs/261688155/small_test_reads.fastq.gz > infile.fastq.gz\n            export bbcms_input=\"infile.fastq.gz\"\n       fi\nif file --mime -b /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/inputs/261688155/small_test_reads.fastq.gz | grep plain; then\n            cat /cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/inputs/261688155/small_test_reads.fastq.gz > infile.fastq\n            export bbcms_input=\"infile.fastq\"\n       fi\n       bbcms.sh -Xmx105G metadatafile=counts.metadata.json mincount=2 highcountfraction=0.6 in=$bbcms_input out=input.corr.fastq.gz > >(tee -a stdout.log) 2> >(tee -a stderr.log >&2) && grep Unique stderr.log | rev |  cut -f 1 | rev  > unique31mer.txt\n       reformat.sh -Xmx105G in=input.corr.fastq.gz out1=input.corr.left.fastq.gz out2=input.corr.right.fastq.gz\n       readlength.sh -Xmx105G in=input.corr.fastq.gz out=readlen.txt\n       rm $bbcms_input",
+      "shardIndex": -1,
+      "outputs": {
+        "outcounts": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/counts.metadata.json",
+        "out2": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/input.corr.right.fastq.gz",
+        "stdout": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/stdout.log",
+        "outreadlen": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/readlen.txt",
+        "out": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/input.corr.fastq.gz",
+        "outresources": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/resources.log",
+        "outkmer": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/unique31mer.txt",
+        "stderr": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/stderr.log",
+        "out1": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/input.corr.left.fastq.gz"
+      },
+      "runtimeAttributes": {
+        "maxRetries": "0",
+        "continueOnReturnCode": "0",
+        "failOnStderr": "false",
+        "docker": "microbiomedata/bbtools:38.90"
+      },
+      "callCaching": {
+        "allowResultReuse": false,
+        "effectiveCallCachingMode": "CallCachingOff"
+      },
+      "inputs": {
+        "input_files": ["./test/data/small_test_reads.fastq.gz"],
+        "container": "microbiomedata/bbtools:38.90",
+        "filename_errlog": "stderr.log",
+        "filename_outfile2": "input.corr.right.fastq.gz",
+        "filename_kmerfile": "unique31mer.txt",
+        "filename_resources": "resources.log",
+        "filename_counts": "counts.metadata.json",
+        "filename_outfile1": "input.corr.left.fastq.gz",
+        "filename_readlen": "readlen.txt",
+        "filename_outfile": "input.corr.fastq.gz",
+        "filename_outlog": "stdout.log",
+        "memory": null
+      },
+      "returnCode": 0,
+      "jobId": "806",
+      "backend": "Docker",
+      "end": "2021-02-20T22:14:44.216Z",
+      "dockerImageUsed": "microbiomedata/bbtools@sha256:a51d71fac485154d585abbf7f7e861a59887c309ceedc3cec0c816acd80e2751",
+      "stderr": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms/execution/stderr",
+      "callRoot": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-bbcms",
+      "attempt": 1,
+      "executionEvents": [{
+        "startTime": "2021-02-20T22:13:49.721Z",
+        "endTime": "2021-02-20T22:13:51.521Z",
+        "description": "PreparingJob"
+      }, {
+        "description": "WaitingForValueStore",
+        "endTime": "2021-02-20T22:13:49.721Z",
+        "startTime": "2021-02-20T22:13:49.708Z"
+      }, {
+        "startTime": "2021-02-20T22:13:48.971Z",
+        "description": "Pending",
+        "endTime": "2021-02-20T22:13:48.992Z"
+      }, {
+        "description": "UpdatingJobStore",
+        "endTime": "2021-02-20T22:14:44.214Z",
+        "startTime": "2021-02-20T22:14:44.211Z"
+      }, {
+        "description": "RequestingExecutionToken",
+        "startTime": "2021-02-20T22:13:48.992Z",
+        "endTime": "2021-02-20T22:13:49.708Z"
+      }, {
+        "startTime": "2021-02-20T22:13:51.521Z",
+        "endTime": "2021-02-20T22:14:44.211Z",
+        "description": "RunningJob"
+      }],
+      "start": "2021-02-20T22:13:48.945Z"
+    }],
+    "jgi_metaASM.create_agp": [{
+      "executionStatus": "Done",
+      "stdout": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/stdout",
+      "backendStatus": "Done",
+      "compressedDockerSize": 449390415,
+      "commandLine": "       touch resources.log;\n       export TIME=\"time result\\ncmd:%C\\nreal %es\\nuser %Us \\nsys  %Ss \\nmemory:%MKB \\ncpu %P\"\n       fungalrelease.sh -Xmx105G in=/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/inputs/-1162452599/scaffolds.fasta out=assembly_scaffolds.fna outc=assembly_contigs.fna agp=assembly.agp legend=assembly_scaffolds.legend mincontig=200 minscaf=200 sortscaffolds=t sortcontigs=t overwrite=t\n       if [ \"503125_160870\" != \"scaffold\" ]; then\n           sed -i 's/scaffold/503125_160870_scf/g' assembly_contigs.fna assembly_scaffolds.fna assembly.agp assembly_scaffolds.legend\n       fi\nbbstats.sh format=8 in=assembly_scaffolds.fna out=stats.json\nsed -i 's/l_gt50k/l_gt50K/g' stats.json",
+      "shardIndex": -1,
+      "outputs": {
+        "outlegend": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly_scaffolds.legend",
+        "outagp": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly.agp",
+        "outcontigs": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly_contigs.fna",
+        "outresources": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/resources.log",
+        "outscaffolds": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/assembly_scaffolds.fna"
+      },
+      "runtimeAttributes": {
+        "docker": "microbiomedata/bbtools:38.90",
+        "failOnStderr": "false",
+        "maxRetries": "0",
+        "continueOnReturnCode": "0"
+      },
+      "callCaching": {
+        "allowResultReuse": false,
+        "effectiveCallCachingMode": "CallCachingOff"
+      },
+      "inputs": {
+        "rename_contig_prefix": "503125_160870",
+        "filename_legend": "assembly_scaffolds.legend",
+        "filename_scaffolds": "assembly_scaffolds.fna",
+        "scaffolds_in": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-assy/execution/spades3/scaffolds.fasta",
+        "prefix": "assembly",
+        "container": "microbiomedata/bbtools:38.90",
+        "filename_agp": "assembly.agp",
+        "filename_contigs": "assembly_contigs.fna",
+        "filename_resources": "resources.log",
+        "memory": null
+      },
+      "returnCode": 0,
+      "jobId": "1726",
+      "backend": "Docker",
+      "end": "2021-02-20T22:15:14.364Z",
+      "dockerImageUsed": "microbiomedata/bbtools@sha256:a51d71fac485154d585abbf7f7e861a59887c309ceedc3cec0c816acd80e2751",
+      "stderr": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp/execution/stderr",
+      "callRoot": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43/call-create_agp",
+      "attempt": 1,
+      "executionEvents": [{
+        "startTime": "2021-02-20T22:15:09.701Z",
+        "endTime": "2021-02-20T22:15:14.363Z",
+        "description": "RunningJob"
+      }, {
+        "startTime": "2021-02-20T22:15:09.691Z",
+        "endTime": "2021-02-20T22:15:09.701Z",
+        "description": "PreparingJob"
+      }, {
+        "endTime": "2021-02-20T22:15:09.690Z",
+        "description": "RequestingExecutionToken",
+        "startTime": "2021-02-20T22:15:09.485Z"
+      }, {
+        "startTime": "2021-02-20T22:15:14.363Z",
+        "description": "UpdatingJobStore",
+        "endTime": "2021-02-20T22:15:14.363Z"
+      }, {
+        "startTime": "2021-02-20T22:15:09.690Z",
+        "endTime": "2021-02-20T22:15:09.691Z",
+        "description": "WaitingForValueStore"
+      }, {
+        "startTime": "2021-02-20T22:15:09.484Z",
+        "description": "Pending",
+        "endTime": "2021-02-20T22:15:09.485Z"
+      }],
+      "start": "2021-02-20T22:15:09.484Z"
+    }]
+  },
+  "outputs": {
+    "jgi_metaASM.final_bam": "/out//mapping/pairedMapped_sorted.bam",
+    "jgi_metaASM.final_samgz": "/out//mapping/pairedMapped.sam.gz",
+    "jgi_metaASM.final_asmstat": "/out//final_assembly/stats.json",
+    "jgi_metaASM.final_agp": "/out//final_assembly/assembly.agp",
+    "jgi_metaASM.final_scaffold": "/out//final_assembly/assembly_scaffolds.fasta",
+    "jgi_metaASM.final_covstat": "/out//mapping/covstats.txt",
+    "jgi_metaASM.final_contig": "/out//final_assembly/assembly_contigs.fasta"
+  },
+  "workflowRoot": "/mnt/nfs3/data1/homes/canon/dev/nmdc_metaassembly/cromwell-executions/jgi_metaASM/08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43",
+  "actualWorkflowLanguage": "WDL",
+  "id": "08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43",
+  "inputs": {
+    "jgi_metaASM.bbtools_container": "microbiomedata/bbtools:38.90",
+    "jgi_metaASM.spades_container": "microbiomedata/spades:3.15.0",
+    "jgi_metaASM.read_mapping_pairs.filename_sorted": "pairedMapped_sorted.bam",
+    "jgi_metaASM.bbcms.filename_outfile": "input.corr.fastq.gz",
+    "jgi_metaASM.assy.system_cpu": "$(grep \"model name\" /proc/cpuinfo | wc -l)",
+    "jgi_metaASM.uniquekmer": 1000,
+    "jgi_metaASM.read_mapping_pairs.filename_bamscript": "to_bam.sh",
+    "jgi_metaASM.read_mapping_pairs.filename_resources": "resources.log",
+    "jgi_metaASM.bbcms.filename_counts": "counts.metadata.json",
+    "jgi_metaASM.read_mapping_pairs.filename_sorted_idx": "pairedMapped_sorted.bam.bai",
+    "jgi_metaASM.bbcms.filename_outfile1": "input.corr.left.fastq.gz",
+    "jgi_metaASM.bbcms.filename_outlog": "stdout.log",
+    "jgi_metaASM.threads": null,
+    "jgi_metaASM.bbcms.filename_kmerfile": "unique31mer.txt",
+    "jgi_metaASM.memory": null,
+    "jgi_metaASM.read_mapping_pairs.filename_outsam": "pairedMapped.sam.gz",
+    "jgi_metaASM.bbcms.filename_outfile2": "input.corr.right.fastq.gz",
+    "jgi_metaASM.bbcms.filename_errlog": "stderr.log",
+    "jgi_metaASM.assy.outprefix": "spades3",
+    "jgi_metaASM.create_agp.prefix": "assembly",
+    "jgi_metaASM.bbcms.filename_resources": "resources.log",
+    "jgi_metaASM.outdir": "/out/",
+    "jgi_metaASM.assy.filename_resources": "resources.log",
+    "jgi_metaASM.bbcms.filename_readlen": "readlen.txt",
+    "jgi_metaASM.read_mapping_pairs.system_cpu": "$(grep \"model name\" /proc/cpuinfo | wc -l)",
+    "jgi_metaASM.read_mapping_pairs.filename_unsorted": "pairedMapped.bam",
+    "jgi_metaASM.create_agp.filename_resources": "resources.log",
+    "jgi_metaASM.rename_contig_prefix": "503125_160870",
+    "jgi_metaASM.input_file": ["./test/data/small_test_reads.fastq.gz"],
+    "jgi_metaASM.read_mapping_pairs.filename_cov": "covstats.txt"
+  },
+  "labels": {
+    "cromwell-workflow-id": "cromwell-08e31392-9a1f-4d7d-9bd3-3be3c4e7bb43"
+  },
+  "submission": "2021-02-20T22:13:44.759Z",
+  "status": "Succeeded",
+  "end": "2021-02-20T22:15:37.028Z",
+  "start": "2021-02-20T22:13:44.890Z"
+}

@@ -1,0 +1,4 @@
+test_local
+sdk.cfg
+test/data/cromwell-executions
+__pycache__

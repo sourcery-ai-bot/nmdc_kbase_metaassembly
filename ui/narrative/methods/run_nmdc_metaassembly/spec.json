@@ -1,0 +1,84 @@
+{
+    "ver": "0.0.1",
+    "authors": [
+        "scanon"
+    ],
+    "contact": "Shane Canon",
+    "categories": ["active", "assembly", "communities"],
+    "widgets": {
+        "input": null,
+	"output": "no-display"
+    },
+    "parameters": [
+        {
+            "id": "reads_upa",
+            "optional": false,
+            "advanced": false,
+            "allow_multiple": false,
+            "default_values": [ "" ],
+            "field_type": "text",
+            "text_options": {
+                "valid_ws_types": [
+                    "KBaseFile.PairedEndLibrary",
+                    "KBaseAssembly.PairedEndLibrary"
+                ]
+            }
+        },
+        {
+            "id": "output_assembly_name",
+            "optional": false,
+            "advanced": false,
+            "allow_multiple": false,
+            "default_values": [ "" ],
+            "field_type": "text",
+            "text_options": {
+                "is_output_name": true,
+                "valid_ws_types": [
+                    "KBaseGenomeAnnotations.Assembly"
+                ]
+            }
+        }
+    ],
+    "behavior": {
+        "service-mapping": {
+            "url": "",
+            "name": "nmdc_metaassembly",
+            "method": "run_nmdc_metaassembly",
+            "input_mapping": [
+                {
+                    "narrative_system_variable": "workspace",
+                    "target_property": "workspace_name"
+                },
+                {
+                    "input_parameter": "reads_upa",
+                    "target_property": "reads_upa",
+                    "target_type_transform": "resolved-ref"
+                },
+                {
+                    "input_parameter": "output_assembly_name",
+                    "target_property": "output_assembly_name"
+                }
+            ],
+            "output_mapping": [
+                {
+                    "service_method_output_path": [0, "assembly_upa"],
+                    "target_property": "assembly_upa"
+                },
+                {
+                    "service_method_output_path": [0, "report_name"],
+                    "target_property": "report_name"
+                },
+                {
+                    "service_method_output_path": [0, "report_ref"],
+                    "target_property": "report_ref"
+                },
+                {
+                    "narrative_system_variable": "workspace",
+                    "target_property": "workspace_name"
+                }
+            ]
+        }
+    },
+    "job_id_output_field": "docker"
+}
+
