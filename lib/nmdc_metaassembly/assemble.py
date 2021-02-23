@@ -7,7 +7,7 @@ import json
 import os
 
 class nmdc_mg_assembly:
-    def __init__(self, callbaack_url, scratch, wdl='../metaAssembly/'):
+    def __init__(self, callbaack_url, scratch, wdl='../../metaAssembly/'):
         self.callback_url = callbaack_url
         self.scratch  = scratch
         self.special = special(self.callback_url)

@@ -54,6 +54,7 @@ class nmdc_metaassembly:
         # ctx is the context object
         # return variables are: output
         #BEGIN run_nmdc_metaassembly
+        os.chdir(self.shared_folder)
         output = self.asu.assemble(params)
         #END run_nmdc_metaassembly
 
