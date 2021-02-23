@@ -50,7 +50,7 @@ class nmdc_mg_assembly:
             dst = './' + f
             shutil.copy(src, dst)
         ins = {
-                "jgi_metaASM.input_file": [rf],
+                "jgi_metaASM.input_file": [rf.replace(self.scratch,'./')],
                 "jgi_metaASM.rename_contig_prefix":"contig",
                 "jgi_metaASM.outdir":"/out/"
         }
