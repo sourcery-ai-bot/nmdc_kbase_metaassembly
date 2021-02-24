@@ -33,10 +33,7 @@ class nmdc_mg_assembly:
             'interleaved': 'true',
             'gzipped': None
         }))['files']
-        file_set = dict()
-        for reads in reads_info:
-            file_set[reads] = reads_info[reads]['files']['fwd']
-        return file_set
+        return {reads: reads_info[reads]['files']['fwd'] for reads in reads_info}
 
 
     def run_wdl(self, rf):
@@ -85,14 +82,13 @@ class nmdc_mg_assembly:
         if not assembly_name:
             raise ValueError("assembly_name must be defined")
 
-        assembly_upa = self.au.save_assembly_from_fasta({
+        return self.au.save_assembly_from_fasta({
             "file": {
                 "path": file_path
             },
             "workspace_name": workspace_name,
             "assembly_name": assembly_name
         })
-        return assembly_upa
 
     def _upload_pipeline_result(self, pipeline_result, workspace_name, assembly_name,
                                 filtered_reads_name=None,
